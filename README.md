@@ -1,1 +1,3 @@
-![lol_gif](https://github.com/user-attachments/assets/49e2fa62-6d30-4958-aecf-33d90de8eda0)
+# 전적검색 사이트
+
+![lol](https://github.com/user-attachments/assets/2c04f49b-53c4-4bbd-a4e6-d22da9dcefcb)
