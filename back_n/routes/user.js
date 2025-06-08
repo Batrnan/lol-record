@@ -2,36 +2,32 @@ const { default: axios } = require('axios');
 const express = require('express');
 const router = express.Router();
 
-const RIOT_API_KEY = 'RGAPI-bdff3104-a1bb-4c47-bab1-615e64bb4402';
+const RIOT_API_KEY = 'RGAPI-606b41b4-c873-4b76-bf25-b9b520ea3475';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ✅ 공통 에러 핸들링 미들웨어
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch((err) =>
+    res.status(500).json({ error: err.message })
+  );
+
+// ✅ API 함수들
 const getUserPUUID = async (gameName, tagLine) => {
   try {
     const accountReponse = await axios.get(
       `https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${gameName}/${tagLine}`,
-      {
-        headers: {
-          'X-Riot-Token': RIOT_API_KEY,
-        },
-      }
+      { headers: { 'X-Riot-Token': RIOT_API_KEY } }
     );
     const puuid = accountReponse.data.puuid;
 
     const summonerResponse = await axios.get(
       `https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${puuid}`,
-      {
-        headers: {
-          'X-Riot-Token': RIOT_API_KEY,
-        },
-      }
+      { headers: { 'X-Riot-Token': RIOT_API_KEY } }
     );
     return summonerResponse.data;
   } catch (error) {
-    console.error(
-      'Error fetching data: ',
-      error.response ? error.response.data : error.message
-    );
+    throw new Error(error.response?.data?.message || 'PUUID 조회 실패');
   }
 };
 
@@ -39,38 +35,24 @@ const getUserRank = async (puuid) => {
   try {
     const userRank = await axios.get(
       `https://kr.api.riotgames.com/lol/league/v4/entries/by-puuid/${puuid}`,
-      {
-        headers: {
-          'X-Riot-Token': RIOT_API_KEY,
-        },
-      }
+      { headers: { 'X-Riot-Token': RIOT_API_KEY } }
     );
+    if (!userRank.data.length) throw new Error('랭크 정보 없음');
     return userRank.data[0];
   } catch (error) {
-    console.error(
-      'Error fetching data: ',
-      error.response ? error.response.data : error.message
-    );
+    throw new Error(error.response?.data?.message || '랭크 조회 실패');
   }
 };
 
 const getMatchIds = async (puuid, start, count) => {
   try {
-    const ids_res = await axios.get(
+    const res = await axios.get(
       `https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?start=${start}&count=${count}`,
-      {
-        headers: {
-          'X-Riot-Token': RIOT_API_KEY,
-        },
-      }
+      { headers: { 'X-Riot-Token': RIOT_API_KEY } }
     );
-
-    return ids_res.data;
+    return res.data;
   } catch (error) {
-    console.error(
-      'Error fetching data: ',
-      error.response ? error.response.data : error.message
-    );
+    throw new Error(error.response?.data?.message || '매치 ID 조회 실패');
   }
 };
 
@@ -78,35 +60,26 @@ const getMatchSummaries = async (ids, puuid) => {
   const chunkSize = 5;
   const summaries = [];
 
-  // 1초에 최대 20번이 제한이여서 꼼수 쓰기. 5개씬 나눠서 요청
   for (let i = 0; i < ids.length; i += chunkSize) {
-    const chunk = ids.slice(i, (i += chunkSize));
+    const chunk = ids.slice(i, i + chunkSize);
 
     const results = await Promise.allSettled(
       chunk.map(async (matchId) => {
         try {
           const res = await axios.get(
             `https://asia.api.riotgames.com/lol/match/v5/matches/${matchId}`,
-            {
-              headers: {
-                'X-Riot-Token': RIOT_API_KEY,
-              },
-            }
+            { headers: { 'X-Riot-Token': RIOT_API_KEY } }
           );
           const data = res.data;
           const player = data.info.participants.find((p) => p.puuid === puuid);
-
-          if (!player) {
-            console.error(`PUUID ${puuid} not found in match ${matchId}`);
-            return null;
-          }
+          if (!player) return null;
 
           return {
             matchId,
             championId: player.championId,
             champion: player.championName,
             level: player.champLevel,
-            kda: `${player.kills}/${player.deaths}/${player.assists}`,
+            kda: `${player.kills} / ${player.deaths} / ${player.assists}`,
             win: player.win,
             items: [
               player.item0,
@@ -211,40 +184,54 @@ const getMatchSummaries = async (ids, puuid) => {
           };
         } catch (error) {
           console.error(
-            `Error fetching match ${matchId} : `,
-            error.response ? error.response.data : error.message
+            `match ${matchId} 에러: `,
+            error.response?.data || error.message
           );
+          return null;
         }
       })
     );
+
     summaries.push(
       ...results
-        .filter((result) => result.status !== 'rejected')
-        .map((r) => r.value || r)
+        .filter((r) => r.status === 'fulfilled' && r.value)
+        .map((r) => r.value)
     );
-
     await delay(1500);
   }
 
   return summaries;
 };
 
-router.get('/', async (req, res) => {
-  const { region, name, tag } = req.query;
-  res.json(await getUserPUUID(name, tag));
-});
+// ✅ 라우터 핸들러들
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const { name, tag } = req.query;
+    const data = await getUserPUUID(name, tag);
+    res.json(data);
+  })
+);
 
-router.get('/rank', async (req, res) => {
-  const { region, name, tag } = req.query;
-  let userInfo = await getUserPUUID(name, tag);
-  res.json(await getUserRank(userInfo.puuid));
-});
+router.get(
+  '/rank',
+  asyncHandler(async (req, res) => {
+    const { name, tag } = req.query;
+    const userInfo = await getUserPUUID(name, tag);
+    const rank = await getUserRank(userInfo.puuid);
+    res.json(rank);
+  })
+);
 
-router.get('/matches', async (req, res) => {
-  const { region, name, tag } = req.query;
-  const userInfo = await getUserPUUID(name, tag);
-  const ids = await getMatchIds(userInfo.puuid, 0, 20);
-  res.json(await getMatchSummaries(ids, userInfo.puuid));
-});
+router.get(
+  '/matches',
+  asyncHandler(async (req, res) => {
+    const { name, tag } = req.query;
+    const userInfo = await getUserPUUID(name, tag);
+    const ids = await getMatchIds(userInfo.puuid, 0, 20);
+    const summaries = await getMatchSummaries(ids, userInfo.puuid);
+    res.json(summaries);
+  })
+);
 
 module.exports = router;

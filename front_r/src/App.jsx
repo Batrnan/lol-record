@@ -1,6 +1,6 @@
 import { Route, BrowserRouter as Router, Routes } from 'react-router-dom';
-import Home from './Home';
-import SummonerList from './SummonerList';
+import Home from './components/Home';
+import SummonerList from './components/SummonerList';
 
 function App() {
   return (
